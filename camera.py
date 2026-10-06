@@ -15,7 +15,7 @@ print("Classes:", model.names)
 # CAMERA
 # ==========================================
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 
 if not cap.isOpened():
     print("Camera could not be opened")
