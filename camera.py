@@ -10,26 +10,36 @@ import time
 # 1. LOAD YOLO MODEL
 # ==========================================
 
-model = YOLO(r"runs/classify/train-2/weights/best.pt")
+MODEL_PATH = r"runs/classify/train-2/weights/best.pt"
+
+model = YOLO(MODEL_PATH)
 
 print("Model loaded!")
 print("Classes:", model.names)
 
 
 # ==========================================
-# 2. CONNECT ESP32
+# 2. ESP32 SETTINGS
+# ==========================================
+
+ESP32_PORT = "COM9"       # CHANGE THIS TO YOUR ESP32 COM PORT
+BAUD_RATE = 115200
+
+
+# ==========================================
+# 3. CONNECT ESP32
 # ==========================================
 
 try:
+
     esp32 = serial.Serial(
-        "COM9",
-        115200,
+        ESP32_PORT,
+        BAUD_RATE,
         timeout=1
     )
 
     time.sleep(2)
 
-    # Remove old/stale responses
     esp32.reset_input_buffer()
 
     print("ESP32 connected!")
@@ -37,18 +47,18 @@ try:
 except Exception as e:
 
     print("ESP32 connection failed!")
-    print(e)
+    print("Error:", e)
 
     exit()
 
 
 # ==========================================
-# 3. OPEN C270 HD WEBCAM USING PYAV
+# 4. OPEN C270 USING PYAV
 # ==========================================
 
 print("Opening C270 HD WEBCAM...")
 
-device = "video=C270 HD WEBCAM"
+device = "video=Logi C270 HD WebCam"
 
 start_time = time.time()
 
@@ -90,7 +100,7 @@ print("--------------------------------")
 
 
 # ==========================================
-# 4. SETTINGS
+# 5. SETTINGS
 # ==========================================
 
 TOTAL_FRAMES = 10
@@ -101,9 +111,13 @@ prediction_list = []
 
 final_prediction = "WAITING"
 
+# IMPORTANT:
+# Prevent sending the same command repeatedly
+last_sent_prediction = ""
+
 
 # ==========================================
-# 5. CAMERA + YOLO LOOP
+# 6. CAMERA + YOLO LOOP
 # ==========================================
 
 try:
@@ -111,7 +125,7 @@ try:
     for frame in container.decode(video=0):
 
         # ----------------------------------
-        # Convert PyAV frame to NumPy/BGR
+        # Convert PyAV frame to OpenCV image
         # ----------------------------------
 
         image = frame.to_ndarray(format="bgr24")
@@ -131,9 +145,12 @@ try:
         probabilities = result.probs.data
 
 
-        # Classes:
+        # ----------------------------------
+        # CLASS PROBABILITIES
+        #
         # 0 = defect
         # 1 = good
+        # ----------------------------------
 
         defect_probability = float(
             probabilities[0]
@@ -145,7 +162,7 @@ try:
 
 
         # ----------------------------------
-        # Current prediction
+        # CURRENT PREDICTION
         # ----------------------------------
 
         if good_probability > defect_probability:
@@ -162,7 +179,7 @@ try:
 
 
         # ----------------------------------
-        # Store confident prediction
+        # STORE ONLY CONFIDENT RESULTS
         # ----------------------------------
 
         if confidence >= MIN_CONFIDENCE:
@@ -173,7 +190,7 @@ try:
 
 
         # ==================================
-        # 6. 10-FRAME MAJORITY DECISION
+        # 7. 10-FRAME MAJORITY DECISION
         # ==================================
 
         if len(prediction_list) >= TOTAL_FRAMES:
@@ -184,100 +201,116 @@ try:
 
 
             print("--------------------------------")
-            print("10-frame decision:")
+            print("10-frame decision")
             print("GOOD   :", counts["GOOD"])
             print("DEFECT :", counts["DEFECT"])
             print("FINAL  :", final_prediction)
 
 
-            # ----------------------------------
-            # Clear old ESP32 responses
-            # ----------------------------------
+            # ==================================
+            # 8. SEND COMMAND ONLY IF CHANGED
+            # ==================================
 
-            esp32.reset_input_buffer()
+            if final_prediction != last_sent_prediction:
 
-
-            # ----------------------------------
-            # Send result to ESP32
-            # ----------------------------------
-
-            if final_prediction == "GOOD":
-
-                esp32.write(b"GOOD\n")
-
-                print(
-                    "Sent to ESP32: GOOD"
-                )
+                # Clear old ESP32 data
+                esp32.reset_input_buffer()
 
 
-            elif final_prediction == "DEFECT":
+                # ----------------------------------
+                # SEND GOOD
+                # ----------------------------------
 
-                esp32.write(b"DEFECT\n")
+                if final_prediction == "GOOD":
 
-                print(
-                    "Sent to ESP32: DEFECT"
-                )
+                    esp32.write(
+                        b"GOOD\n"
+                    )
 
-
-            # ----------------------------------
-            # Wait for ESP32 acknowledgment
-            # ----------------------------------
-
-            start_wait = time.time()
-
-            response_received = False
-
-
-            while time.time() - start_wait < 2:
-
-                if esp32.in_waiting > 0:
-
-                    response = (
-                        esp32.readline()
-                        .decode(errors="ignore")
-                        .strip()
+                    print(
+                        "Sent to ESP32: GOOD"
                     )
 
 
-                    if response:
+                # ----------------------------------
+                # SEND DEFECT
+                # ----------------------------------
 
-                        print(
-                            "ESP32:",
-                            response
+                elif final_prediction == "DEFECT":
+
+                    esp32.write(
+                        b"DEFECT\n"
+                    )
+
+                    print(
+                        "Sent to ESP32: DEFECT"
+                    )
+
+
+                # Remember what was sent
+                last_sent_prediction = final_prediction
+
+
+                # ==================================
+                # 9. WAIT FOR ESP32 RESPONSE
+                # ==================================
+
+                start_wait = time.time()
+
+                response_received = False
+
+                while time.time() - start_wait < 2:
+
+                    if esp32.in_waiting > 0:
+
+                        response = (
+                            esp32.readline()
+                            .decode(errors="ignore")
+                            .strip()
                         )
 
+                        if response:
 
-                        # Check acknowledgment
-                        if final_prediction in response:
+                            print(
+                                "ESP32:",
+                                response
+                            )
 
-                            response_received = True
+                            if final_prediction in response:
 
-                            break
+                                response_received = True
+
+                                break
+
+                    time.sleep(0.01)
 
 
-                time.sleep(0.01)
+                # ----------------------------------
+                # CHECK RESPONSE
+                # ----------------------------------
 
+                if not response_received:
 
-            # ----------------------------------
-            # Check acknowledgment
-            # ----------------------------------
+                    print(
+                        "ESP32: No acknowledgment received"
+                    )
 
-            if not response_received:
+            else:
 
                 print(
-                    "ESP32: No acknowledgment received"
+                    "Same result - command not sent again"
                 )
 
 
             # ----------------------------------
-            # Clear predictions
+            # CLEAR PREDICTIONS
             # ----------------------------------
 
             prediction_list.clear()
 
 
         # ==================================
-        # 7. DISPLAY INFORMATION
+        # 10. DISPLAY CURRENT PREDICTION
         # ==================================
 
         cv2.putText(
@@ -325,7 +358,7 @@ try:
 
 
         # ==================================
-        # 8. SHOW CAMERA
+        # 11. SHOW CAMERA
         # ==================================
 
         cv2.imshow(
@@ -335,7 +368,7 @@ try:
 
 
         # ==================================
-        # 9. QUIT
+        # 12. QUIT
         # ==================================
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -344,7 +377,7 @@ try:
 
 
 # ==========================================
-# 10. CLEANUP
+# 13. CLEANUP
 # ==========================================
 
 finally:

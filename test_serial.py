@@ -1,20 +1,18 @@
 import serial
 import time
 
-esp32 = serial.Serial("COM9", 115200, timeout=1)
+arduino = serial.Serial("COM15", 115200, timeout=2)
 
 time.sleep(2)
 
-print("Connected to ESP32!")
+print("Sending GOOD")
 
-esp32.write(b"GOOD\n")
-print("Sent: GOOD")
+arduino.write(b"GOOD\n")
+arduino.flush()
 
 time.sleep(2)
 
-esp32.write(b"DEFECT\n")
-print("Sent: DEFECT")
+while arduino.in_waiting:
+    print("Arduino:", arduino.readline().decode(errors="ignore").strip())
 
-esp32.close()
-
-print("Connection closed.")
+arduino.close()
